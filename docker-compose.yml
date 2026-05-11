@@ -1,0 +1,91 @@
+version: '3.8'
+
+services:
+  api:
+    build: .
+    container_name: tumana_api
+    ports:
+      - "5000:5000"
+    environment:
+      - FLASK_ENV=development
+      - DATABASE_URL=mysql+pymysql://tumana:tumana_pass@db:3306/tumana_db
+      - JWT_SECRET_KEY=your-jwt-secret-key-change-in-production
+      - SECRET_KEY=dev-secret-change-in-prod
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=amqp://guest:guest@rabbitmq:5672//
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - .:/app
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      rabbitmq:
+        condition: service_started
+    command: >
+      gunicorn --preload -w 4 -b 0.0.0.0:5000 "app:create_app()"
+      --log-level debug
+      --access-logfile -
+      --error-logfile -
+      --capture-output
+
+    restart: unless-stopped
+
+  db:
+    image: mysql:8.0
+    container_name: tumana_db
+    environment:
+      MYSQL_ROOT_PASSWORD: root_password
+      MYSQL_DATABASE: tumana_db
+      MYSQL_USER: tumana
+      MYSQL_PASSWORD: tumana_pass
+    ports:
+      - "3309:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 5s
+      timeout: 10s
+      retries: 20
+      start_period: 30s
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: tumana_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: tumana_rabbitmq
+    ports:
+      - "5672:5672"      # broker
+      - "15672:15672"    # management UI
+    restart: unless-stopped
+
+  celery:
+    build: .
+    container_name: tumana_celery
+    environment:
+      - DATABASE_URL=mysql+pymysql://tumana:tumana_pass@db:3306/tumana_db
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=amqp://guest:guest@rabbitmq:5672//
+    volumes:
+      - .:/app
+    depends_on:
+      - db
+      - redis
+      - rabbitmq
+    command: celery -A app.celery_app worker --loglevel=info
+    restart: unless-stopped
+
+volumes:
+  mysql_data:
+  redis_data:
